@@ -26,8 +26,9 @@ Usage:
       (or --dest onedrive:ABP_ads)
 
 Cloud layout:
-  ABP_ads/<date>/<edition-slug>/p03_ad236522.jpg
-  ABP_ads/<date>/metadata.csv
+  ABP_ads/<date>/ad236522.jpg   (each ad once per date, whichever editions it ran in)
+  ABP_ads/<date>/metadata.csv   (one row per ad; edition_slugs / edition_ids / edition_names /
+                                 edition_pages list every edition it appeared in, "; "-separated)
   ABP_ads/all_ads.csv
   ABP_ads/_done.txt            (resume log: re-run the same command to continue)
 """
@@ -45,10 +46,13 @@ AD_URL = BASE + "/{slug}/{eid}/{d}/page-{n}/{ad}.html"
 PROFILE = Path("abp_browser_profile")
 MAX_PAGES = 80
 PAGE_CACHE = 48  # page scans kept in RAM (~1-2 MB each); shared pages across districts download once
-FIELDS = ["date", "edition_slug", "edition_id", "edition_name", "page", "section", "ad_id",
-          "top_pct", "left_pct", "width_pct", "height_pct", "x_px", "y_px", "w_px", "h_px",
-          "page_w_px", "page_h_px", "area_pct_of_page", "image_file", "duplicate_of",
-          "ad_page_url", "page_image_url", "page_image_quality"]
+LIST_COLS = ["edition_slugs", "edition_ids", "edition_names", "edition_pages"]  # "; "-separated
+FIELDS = ["date", "ad_id", "n_editions", *LIST_COLS,
+          # geometry / context below is from the first edition the ad was found in
+          "page", "section", "top_pct", "left_pct", "width_pct", "height_pct",
+          "x_px", "y_px", "w_px", "h_px", "page_w_px", "page_h_px", "area_pct_of_page",
+          "image_file", "ad_page_url", "page_image_url", "page_image_quality"]
+SEP = "; "
 
 
 # ---------------------------------------------------------------- cloud storage (rclone)
@@ -100,12 +104,27 @@ def csv_bytes(rows):
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=FIELDS, extrasaction="ignore")
     w.writeheader()
-    w.writerows(rows)
+    for r in rows:
+        w.writerow({**r, **{c: SEP.join(r[c]) for c in LIST_COLS}, "n_editions": len(r["edition_slugs"])})
     return buf.getvalue().encode("utf-8-sig")  # BOM so Excel shows Bengali correctly
 
 
 def csv_rows(text):
-    return list(csv.DictReader(io.StringIO(text))) if text else []
+    rows = list(csv.DictReader(io.StringIO(text))) if text else []
+    for r in rows:
+        for c in LIST_COLS:
+            r[c] = [v for v in (r.get(c) or "").split(SEP) if v]
+    return rows
+
+
+def add_edition(row, slug, eid, name, page):
+    if slug not in row["edition_slugs"]:
+        row["edition_slugs"].append(slug)
+        row["edition_ids"].append(str(eid))
+        row["edition_names"].append(name)
+    tag = f"{slug}:p{page}"
+    if tag not in row["edition_pages"]:
+        row["edition_pages"].append(tag)
 
 
 # ---------------------------------------------------------------- parsing
@@ -307,15 +326,13 @@ def cmd_scrape(a):
         for d in dates:
             if all(f"{d}|{e['slug']}" in done for e in eds):
                 continue
-            day_rows = csv_rows(cloud.get_text(f"{d}/metadata.csv"))
-            seen = {}  # ad_id -> first file (same ad usually runs in many district editions)
-            for r in day_rows:
-                seen.setdefault(r["ad_id"], r["image_file"])
+            # one row per unique ad on this date; same ad in other editions only extends its lists
+            day = OrderedDict((r["ad_id"], r) for r in csv_rows(cloud.get_text(f"{d}/metadata.csv")))
             for e in eds:
                 slug, eid, key = e["slug"], str(e["id"]), f"{d}|{e['slug']}"
                 if key in done:
                     continue
-                mode, n, rows, futs = "api", 1, [], []
+                mode, n, n_new, n_dup, futs = "api", 1, 0, 0, []
                 while n <= MAX_PAGES:
                     data = fetch_page_api(ctx, slug, eid, d, n) if mode == "api" else None
                     if data is None and n == 1 and mode == "api":
@@ -330,43 +347,48 @@ def cmd_scrape(a):
                         break
                     ed_name, section = parse_meta_title(data.get("meta_title", ""))
                     candidates, ads = parse_page(data["epaper_page_data"])
-                    if ads:
+                    # already-saved ads: just record this edition, no download
+                    for b in ads:
+                        if b["id"] in day:
+                            add_edition(day[b["id"]], slug, eid, ed_name, n)
+                            n_dup += 1
+                    new = [b for b in ads if b["id"] not in day]
+                    if new:  # page scan is only fetched when it holds an ad we don't have yet
                         img, img_url, quality = download_image(ctx, candidates, cache)
                         nap(a)
                         if img is None:
-                            print(f"  !! {d} {slug} p{n}: page image failed, {len(ads)} ads skipped")
+                            print(f"  !! {d} {slug} p{n}: page image failed, {len(new)} new ads skipped")
                         else:
                             cloud.mkdir(d)
-                            cloud.mkdir(f"{d}/{slug}")
-                            for b in ads:
+                            for b in new:
                                 crop, (x, y, w, h) = crop_ad(img, b)
                                 buf = io.BytesIO()
                                 crop.save(buf, format="JPEG", quality=95)
-                                rel = f"{d}/{slug}/p{n:02d}_{b['id']}.jpg"
+                                rel = f"{d}/{b['id']}.jpg"
                                 futs.append(cloud.put_async(rel, buf.getvalue()))
-                                dup = seen.get(b["id"], "")
-                                seen.setdefault(b["id"], rel)
-                                rows.append({
-                                    "date": d, "edition_slug": slug, "edition_id": eid, "edition_name": ed_name,
-                                    "page": n, "section": section, "ad_id": b["id"],
+                                row = {
+                                    "date": d, "ad_id": b["id"], **{c: [] for c in LIST_COLS},
+                                    "page": n, "section": section,
                                     "top_pct": b["top"], "left_pct": b["left"], "width_pct": b["width"], "height_pct": b["height"],
                                     "x_px": x, "y_px": y, "w_px": w, "h_px": h,
                                     "page_w_px": img.width, "page_h_px": img.height,
                                     "area_pct_of_page": round(b["width"] * b["height"] / 100, 2),
-                                    "image_file": rel, "duplicate_of": dup,
+                                    "image_file": rel,
                                     "ad_page_url": AD_URL.format(slug=slug, eid=eid, d=d, n=n, ad=b["id"]),
-                                    "page_image_url": img_url, "page_image_quality": quality})
+                                    "page_image_url": img_url, "page_image_quality": quality}
+                                add_edition(row, slug, eid, ed_name, n)
+                                day[b["id"]] = row
+                                n_new += 1
                     n += 1
                 for f in wait(futs).done:
                     f.result()  # raises if an image upload ultimately failed -> edition not marked done
-                if rows:
-                    day_rows = [r for r in day_rows if r["edition_slug"] != slug] + rows
+                if n_new or n_dup:
                     cloud.mkdir(d)
-                    cloud.put(f"{d}/metadata.csv", csv_bytes(day_rows))
+                    cloud.put(f"{d}/metadata.csv", csv_bytes(day.values()))
                 done.add(key)
                 cloud.put("_done.txt", ("\n".join(sorted(done)) + "\n").encode())
-                print(f"{d} {slug:<28} pages={n - 1:<3} ads={len(rows)}")
-            all_rows = [r for r in all_rows if r["date"] != d] + day_rows
+                print(f"{d} {slug:<28} pages={n - 1:<3} new_ads={n_new:<4} already_saved={n_dup}")
+            all_rows = [r for r in all_rows if r["date"] != d] + list(day.values())
             cloud.put("all_ads.csv", csv_bytes(all_rows))
         ctx.close()
     cloud.pool.shutdown()
