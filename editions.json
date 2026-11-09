@@ -1,0 +1,72 @@
+[
+  {
+    "slug": "bardhaman-edition",
+    "id": "2",
+    "label": "বর্ধমান"
+  },
+  {
+    "slug": "asansol-durgapur",
+    "id": "3",
+    "label": "আসানসোল দুর্গাপুর"
+  },
+  {
+    "slug": "purulia-bankura",
+    "id": "4",
+    "label": "পুরুলিয়া বাঁকুড়া"
+  },
+  {
+    "slug": "birbhum",
+    "id": "5",
+    "label": "বীরভূম"
+  },
+  {
+    "slug": "nadia",
+    "id": "6",
+    "label": "নদিয়া"
+  },
+  {
+    "slug": "murshidabad",
+    "id": "7",
+    "label": "মুর্শিদাবাদ"
+  },
+  {
+    "slug": "north-south-24-parganas",
+    "id": "8",
+    "label": "উত্তর, দক্ষিণ ২৪ পরগনা"
+  },
+  {
+    "slug": "howrah-hooghly",
+    "id": "9",
+    "label": "হাওড়া, হুগলি"
+  },
+  {
+    "slug": "siliguri-jalpaiguri",
+    "id": "10",
+    "label": "শিলিগুড়ি, জলপাইগুড়ি"
+  },
+  {
+    "slug": "north-of-north-bengal",
+    "id": "11",
+    "label": "উত্তরবঙ্গের উত্তরে"
+  },
+  {
+    "slug": "west-midnapur-jhargram",
+    "id": "12",
+    "label": "পশ্চিম মেদিনীপুর-ঝাড়গ্রাম"
+  },
+  {
+    "slug": "east-midnapur",
+    "id": "13",
+    "label": "পূর্ব মেদিনীপুর"
+  },
+  {
+    "slug": "calcutta-north",
+    "id": "15",
+    "label": "কলকাতা"
+  },
+  {
+    "slug": "south-of-north-bengal",
+    "id": "27",
+    "label": "উত্তরবঙ্গের দক্ষিণে"
+  }
+]
